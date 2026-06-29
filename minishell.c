@@ -3,7 +3,7 @@
 // Global job list
 Job *job_list = NULL;
 int next_job_id = 1;
-
+static int last_exit_status = 0;
 
 void init_shell() {
     // Initialize the shell (e.g., set up environment, signal handlers)
@@ -110,9 +110,14 @@ int execute_command(char **args) {
 }
 
 int is_builtin_command(char **args) {
-    // Check if the command is a built-in command (e.g., cd, exit, fg, bg)
-    if (strcmp(args[0], "cd") == 0 || strcmp(args[0], "exit") == 0 ||
-        strcmp(args[0], "fg") == 0 || strcmp(args[0], "bg") == 0 ||
+    // Check if the command matches any of our implemented internal commands
+    if (strcmp(args[0], "cd") == 0 || 
+        strcmp(args[0], "exit") == 0 ||
+        strcmp(args[0], "pwd") == 0 || 
+        strcmp(args[0], "echo") == 0 || 
+        strcmp(args[0], "clear") == 0 ||
+        strcmp(args[0], "fg") == 0 || 
+        strcmp(args[0], "bg") == 0 ||
         strcmp(args[0], "jobs") == 0) {
         return 1;
     }
@@ -120,13 +125,211 @@ int is_builtin_command(char **args) {
 }
 
 void handle_builtin_command(char **args) {
-    // Handle built-in commands
-    // cd, exit, fg, bg, jobs etc
+    char cwd[1024];
+    if (strcmp(args[0], "exit") == 0) {
+        exit(0);
+    } 
+    else if (strcmp(args[0], "cd") == 0) {
+        // Case A: No arguments provided, default to HOME
+        if (args[1] == NULL) {
+            char *home = getenv("HOME");
+            if (home == NULL) {
+                fprintf(stderr, "minishell: cd: HOME not set\n");
+            } 
+            else if (chdir(home) == -1) {
+                perror("minishell");
+            }
+        } 
+        // Case B: A specific path was provided
+        else {
+            if (chdir(args[1]) == -1) {
+                perror("minishell");
+            }
+        }
+    }
+    else if (strcmp(args[0], "pwd") == 0) {
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            printf("%s\n", cwd);
+        } else {
+            perror("pwd");
+        }
+    }
+    else if (strcmp(args[0], "echo") == 0) {
+        int i = 1;
+        while (args[i] != NULL) {
+            if (strcmp(args[i], "$$") == 0) {
+                printf("%d", getpid());
+            } 
+            else if (strcmp(args[i], "$?") == 0) {
+                printf("%d\n", last_exit_status); // Placeholder until waitpid status tracking is wired
+            } 
+            else if (strcmp(args[i], "$SHELL") == 0) {
+                char *executable_shell = getenv("SHELL");
+                if (executable_shell != NULL) {
+                    printf("%s", executable_shell);
+                }
+            } 
+            else {
+                printf("%s", args[i]);
+            }
+
+            if (args[i + 1] != NULL) {
+                printf(" ");
+            }
+            i++;
+        }
+        printf("\n");
+    }
+    else if (strcmp(args[0], "clear") == 0) {
+        printf("\033[2J\033[H");
+        fflush(stdout);
+    }
+}
+
+// Assume this is declared globally at the top of minishell.c
+// int last_exit_status = 0;
+
+int call_n_pipe(int no_of_args, int command_count, char **args) {
+    // FIX 1: cmds is an array of string arrays, so it requires a char ***
+    char ***cmds = malloc(command_count * sizeof(char **));
+    if (cmds == NULL) {
+        perror("malloc");
+        return 1;
+    }
+
+    // Parsing the commands
+    int cmd_index = 0;
+    cmds[cmd_index++] = &args[0];
+
+    // FIX 2: Iterate through all arguments, not just the command count
+    for (int i = 0; i < no_of_args; i++) {
+        
+        // Safety check to ensure we don't pass NULL to strcmp
+        if (args[i] != NULL && strcmp(args[i], "|") == 0) {
+            
+            //Actually assign NULL to split the array
+            args[i] = NULL;
+
+            //Safely check for missing trailing command without segfaulting
+            if (args[i + 1] == NULL || strcmp(args[i + 1], "|") == 0) {
+                fprintf(stderr, "minishell: syntax error near unexpected token `|'\n");
+                free(cmds);
+                return 1;
+            }
+            cmds[cmd_index++] = &args[i + 1];
+        }
+    }
+
+    // If the very first argument was a PIPE
+    if (cmds[0][0] == NULL) {
+        fprintf(stderr, "minishell: syntax error near unexpected token `|'\n");
+        free(cmds);
+        return 1;
+    }
+
+    int prev_fd = -1;
+    int fd[2];
+
+    for (int i = 0; i < command_count; i++) {
+        if (i < command_count - 1) {
+            if (pipe(fd) < 0) {
+                perror("minishell: pipe");
+                free(cmds);
+                return 1;
+            }
+        }
+
+        pid_t ret = fork();
+        if (ret < 0) {
+            perror("minishell: fork");
+            free(cmds);
+            return 1;
+        } 
+        else if (ret == 0) {
+            // Child logic (Flawless)
+            if (i > 0) {
+                dup2(prev_fd, STDIN_FILENO);
+                close(prev_fd);
+            }
+
+            if (i < command_count - 1) {
+                dup2(fd[1], STDOUT_FILENO);
+                close(fd[0]);
+                close(fd[1]);
+            }
+
+            execvp(cmds[i][0], cmds[i]);
+            perror("minishell");
+            exit(127);
+        } 
+        else {
+            // Parent logic (Flawless)
+            if (i > 0) {
+                close(prev_fd);
+            }
+
+            if (i < command_count - 1) {
+                prev_fd = fd[0];
+                close(fd[1]);
+            }
+        }
+    }
+
+    // reap all children in the pipeline
+    for (int i = 0; i < command_count; i++) {
+        int wstatus;
+        wait(&wstatus);
+
+        if (WIFEXITED(wstatus)) {
+            last_exit_status = WEXITSTATUS(wstatus);
+        }
+    }
+
+    free(cmds);
+    return 0;
 }
 
 void handle_redirection_and_piping(char **args) {
-    // Handle redirection and piping
-    // This is a placeholder for actual implementation
+    // Detecting the pipes
+    int pipe_count = 0;
+    int no_of_args = 0;
+    
+    for (int i = 0; args[i] != NULL; i++) {
+        if (strcmp(args[i], "|") == 0) {
+            pipe_count++;    
+        }
+        no_of_args++;
+    }
+
+    int command_count = pipe_count + 1;
+
+    if (pipe_count == 0) {
+        // ... (Your existing single command execution block) ...
+        pid_t pid = fork(); 
+        
+        if (pid < 0) {
+            perror("minishell: fork");
+            return;
+        } 
+        else if (pid == 0) {
+            execvp(args[0], args);
+            perror("minishell"); 
+            exit(1);
+        } 
+        else {
+            int wstatus;
+            waitpid(pid, &wstatus, WUNTRACED); 
+            if (WIFEXITED(wstatus)) {
+                last_exit_status = WEXITSTATUS(wstatus);
+            }
+        }
+    }
+    else {
+        // Multi-pipe execution
+        if (call_n_pipe(no_of_args, command_count, args) == 1) {
+            // Error already printed by call_n_pipe
+        }
+    }
 }
 
 void signal_handler(int sig) {

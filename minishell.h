@@ -38,5 +38,6 @@ void remove_job(pid_t pid);
 void list_jobs();
 void bring_job_to_foreground(int job_id);
 void send_job_to_background(int job_id);
+int call_n_pipe(int no_of_args, int command_count, char **args);
 
 #endif // MINISHELL_H
