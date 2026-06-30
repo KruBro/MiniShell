@@ -1,14 +1,20 @@
 #ifndef MINISHELL_H
 #define MINISHELL_H
 
+#define _XOPEN_SOURCE 700 
+
+// 2. Standard C libraries
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/wait.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <errno.h>
+
+// 3. System libraries for process handling (CRITICAL FIX)
+#include <sys/types.h>  // Defines pid_t
+#include <sys/wait.h>   // Defines waitpid and macros
 
 // Define constants
 #define MAX_INPUT_SIZE 1024
@@ -31,7 +37,7 @@ int execute_command(char **args);
 int is_builtin_command(char **args);
 void handle_builtin_command(char **args);
 void handle_redirection_and_piping(char **args);
-void signal_handler(int sig);
+void signal_handler(int sig, siginfo_t *info, void *data);
 void init_signal_handlers();
 void add_job(pid_t pid, char *command);
 void remove_job(pid_t pid);

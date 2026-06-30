@@ -190,7 +190,7 @@ void handle_builtin_command(char **args) {
 // int last_exit_status = 0;
 
 int call_n_pipe(int no_of_args, int command_count, char **args) {
-    // FIX 1: cmds is an array of string arrays, so it requires a char ***
+    // cmds is an array of string arrays, so it requires a char ***
     char ***cmds = malloc(command_count * sizeof(char **));
     if (cmds == NULL) {
         perror("malloc");
@@ -226,6 +226,9 @@ int call_n_pipe(int no_of_args, int command_count, char **args) {
         free(cmds);
         return 1;
     }
+
+    int stdin_backup = dup(0);
+    int stdout_backup = dup(1);
 
     int prev_fd = -1;
     int fd[2];
@@ -274,6 +277,11 @@ int call_n_pipe(int no_of_args, int command_count, char **args) {
             }
         }
     }
+
+    dup2(stdin_backup, STDIN_FILENO);
+    dup2(stdout_backup, STDOUT_FILENO);
+    close(stdin_backup);
+    close(stdout_backup);
 
     // reap all children in the pipeline
     for (int i = 0; i < command_count; i++) {
@@ -330,13 +338,4 @@ void handle_redirection_and_piping(char **args) {
             // Error already printed by call_n_pipe
         }
     }
-}
-
-void signal_handler(int sig) {
-    // Handle signals
-}
-
-void init_signal_handlers() {
-    // Initialize signal handlers
-
 }
