@@ -29,6 +29,11 @@ typedef struct Job {
     struct Job *next;
 } Job;
 
+extern Job *job_list;
+extern int next_job_id;
+extern int last_exit_status;
+extern volatile sig_atomic_t foreground_pid;
+
 // Function declarations
 void init_shell();
 void main_loop();
@@ -45,5 +50,6 @@ void list_jobs();
 void bring_job_to_foreground(int job_id);
 void send_job_to_background(int job_id);
 int call_n_pipe(int no_of_args, int command_count, char **args);
+int get_last_job_id();
 
 #endif // MINISHELL_H

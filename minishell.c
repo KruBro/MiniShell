@@ -3,7 +3,8 @@
 // Global job list
 Job *job_list = NULL;
 int next_job_id = 1;
-static int last_exit_status = 0;
+int last_exit_status = 0;
+volatile sig_atomic_t foreground_pid = 0;
 
 void init_shell() {
     // Initialize the shell (e.g., set up environment, signal handlers)
@@ -184,6 +185,38 @@ void handle_builtin_command(char **args) {
         printf("\033[2J\033[H");
         fflush(stdout);
     }
+    else if(strcmp(args[0], "jobs") == 0)
+    {
+        list_jobs();
+    }
+    else if(strcmp(args[0], "fg") == 0)
+    {
+        if(args[1] == NULL)
+        {
+            int last_id = get_last_job_id();
+            if(last_id == -1)
+                fprintf(stderr, "minishell: fg: current: no such job\n");
+            else
+                send_job_to_background(last_id);
+        }
+        else
+        {
+            send_job_to_background(atoi(args[1]));
+        }
+    }
+    else if(strcmp(args[0], "bg") == 0)
+    {
+        if(args[1] == NULL)
+        {
+            int last_id = get_last_job_id();
+            if(last_id == -1)
+                fprintf(stderr, "minishell: fg: current: no such job\n");
+            else
+                send_job_to_background(last_id);
+        }
+        else
+            send_job_to_background(atoi(args[1]));
+    }
 }
 
 // Assume this is declared globally at the top of minishell.c
@@ -249,6 +282,9 @@ int call_n_pipe(int no_of_args, int command_count, char **args) {
             return 1;
         } 
         else if (ret == 0) {
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+
             // Child logic (Flawless)
             if (i > 0) {
                 dup2(prev_fd, STDIN_FILENO);
@@ -274,6 +310,10 @@ int call_n_pipe(int no_of_args, int command_count, char **args) {
             if (i < command_count - 1) {
                 prev_fd = fd[0];
                 close(fd[1]);
+            
+            if (i == command_count - 1) {
+                foreground_pid = ret;
+            }
             }
         }
     }
@@ -283,14 +323,9 @@ int call_n_pipe(int no_of_args, int command_count, char **args) {
     close(stdin_backup);
     close(stdout_backup);
 
-    // reap all children in the pipeline
-    for (int i = 0; i < command_count; i++) {
-        int wstatus;
-        wait(&wstatus);
-
-        if (WIFEXITED(wstatus)) {
-            last_exit_status = WEXITSTATUS(wstatus);
-        }
+    while(foreground_pid != 0)
+    {
+        pause();
     }
 
     free(cmds);
@@ -320,15 +355,18 @@ void handle_redirection_and_piping(char **args) {
             return;
         } 
         else if (pid == 0) {
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+
             execvp(args[0], args);
             perror("minishell"); 
             exit(1);
         } 
-        else {
-            int wstatus;
-            waitpid(pid, &wstatus, WUNTRACED); 
-            if (WIFEXITED(wstatus)) {
-                last_exit_status = WEXITSTATUS(wstatus);
+        else { 
+            foreground_pid = pid;
+            while(foreground_pid != 0)
+            {
+                pause();
             }
         }
     }

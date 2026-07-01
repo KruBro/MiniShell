@@ -149,4 +149,4 @@ zforce
 zgrep
 zless
 zmore
-znew
+znewa
