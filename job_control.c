@@ -1,10 +1,16 @@
 #include "minishell.h"
 
+int job_exists(pid_t pid) {
+    Job *temp = job_list;
+    while (temp != NULL) {
+        if (temp->pid == pid) {
+            return 1;
+        }
+        temp = temp->next;
+    }
+    return 0;
+}
 
-// Job *job_list = NULL;
-// int next_job_id = 1;
-
-// Add this near your other job control functions (add_job, remove_job, etc.)
 int get_last_job_id() {
     // If there are no background jobs, return -1 as an error code
     if (job_list == NULL) {
@@ -91,7 +97,8 @@ void list_jobs() {
     
     Job *temp = job_list;
     while (temp != NULL) {
-        printf("[%d] %d %s\n", temp->job_id, temp->pid, temp->command);
+        printf(COLOR_YELLOW "[%d]" COLOR_RESET " %d  " COLOR_CYAN "%s\n" COLOR_RESET,
+               temp->job_id, temp->pid, temp->command);
         temp = temp->next;
     }
 }
@@ -104,60 +111,62 @@ void bring_job_to_foreground(int job_id) {
 
     // UX: Report if the job isn't found
     if (temp == NULL) {
-        fprintf(stderr, "minishell: fg: %d: no such job\n", job_id);
+        fprintf(stderr, COLOR_RED "minishell: fg: %d: no such job\n" COLOR_RESET, job_id);
         return;
     }
     
     pid_t target_pid = temp->pid;
-    foreground_pid = target_pid;
+
+    // Track the full command so the SIGCHLD handler can label the job
+    // correctly if it gets suspended again with Ctrl+Z.
+    strncpy(current_fg_cmd, temp->command, MAX_INPUT_SIZE - 1);
+    current_fg_cmd[MAX_INPUT_SIZE - 1] = '\0';
 
     // UX: Print the command that is taking over the screen
-    printf("%s\n", temp->command);
+    printf(COLOR_CYAN "%s\n" COLOR_RESET, temp->command);
 
-    // SYSTEM SAFETY: Ignore terminal signals while we shift terminal control
-    signal(SIGTTIN, SIG_IGN);
-    signal(SIGTTOU, SIG_IGN);
-
-    // 1. Give terminal to child
+    // 1. Give terminal to the job's process group (each background job
+    // is its own process group leader, set up when it was launched).
     tcsetpgrp(STDIN_FILENO, target_pid);
-    
-    // 2. Wake child up
+
+    // 2. Wake child up, then wait for the SIGCHLD handler to reap it
+    // (exited) or re-suspend it (stopped again).
+    //
+    // BUGFIX: this used to call waitpid() directly in this function too,
+    // which raced with the async SIGCHLD handler doing the same
+    // waitpid(-1, ...) — whichever one reaped the child first would
+    // leave the other with ECHILD, silently corrupting job/exit-status
+    // state. wait_for_foreground() relies solely on the signal handler
+    // (like every other wait point in this shell) and blocks SIGCHLD
+    // around the check/sigsuspend so a fast-finishing child can't be
+    // missed either.
     kill(target_pid, SIGCONT);
+    wait_for_foreground(target_pid);
 
-    // 3. Wait for child to exit or pause
-    int wstatus;
-    waitpid(target_pid, &wstatus, WUNTRACED);
-
-    // 4. Shell takes terminal back
-    tcsetpgrp(STDIN_FILENO, getpid());
-
-    // SYSTEM SAFETY: Restore default signal behavior
-    signal(SIGTTIN, SIG_DFL);
-    signal(SIGTTOU, SIG_DFL);
-
-    // 5. Cleanup and State update
-    if (WIFEXITED(wstatus) || WIFSIGNALED(wstatus)) {
-        if (WIFEXITED(wstatus)) {
-            last_exit_status = WEXITSTATUS(wstatus);
-        }
-        remove_job(target_pid);
-    }
+    // 3. Shell takes terminal back.
+    // BUGFIX: the old code also called signal(SIGTTIN/SIGTTOU, SIG_DFL)
+    // here, which permanently undid the shell's own protection against
+    // being stopped by the kernel — after the FIRST "fg", any later
+    // tcsetpgrp() call while the shell wasn't the foreground group could
+    // stop the shell itself. The shell must ignore these forever.
+    tcsetpgrp(STDIN_FILENO, shell_pgid);
 }
 
 void send_job_to_background(int job_id) {
-      Job *temp = job_list;
+    Job *temp = job_list;
     while (temp != NULL && temp->job_id != job_id) {
         temp = temp->next;
     }
 
     // UX: Report if the job isn't found
+    // BUGFIX: this used to always say "fg:" even when called from bg.
     if (temp == NULL) {
-        fprintf(stderr, "minishell: bg: %d: no such job\n", job_id);
+        fprintf(stderr, COLOR_RED "minishell: bg: %d: no such job\n" COLOR_RESET, job_id);
         return;
     }
     
     pid_t target_pid = temp->pid;
 
-    printf("[%d]  %s &\n", job_id, temp->command);
+    printf(COLOR_GREEN "[%d]  %s &\n" COLOR_RESET, job_id, temp->command);
     kill(target_pid, SIGCONT);
 }
