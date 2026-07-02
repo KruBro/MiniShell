@@ -1,0 +1,69 @@
+name: Minishell CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential valgrind
+
+    - name: Build Minishell
+      # Overriding CFLAGS to include -g for accurate Valgrind line numbers
+      run: make CFLAGS="-Wall -Wextra -std=gnu11 -g"
+
+    - name: Verify Build Artifact
+      run: |
+        if [ ! -f "./minishell" ] || [ ! -x "./minishell" ]; then
+          echo "Error: minishell binary not found or lacks execution permissions."
+          exit 1
+        fi
+
+    - name: Functional Tests (I/O, Built-ins, and Pipelines)
+      run: |
+        echo "=== Testing Echo Builtin ==="
+        OUTPUT=$(echo "echo sys_test_val" | ./minishell)
+        if [[ "$OUTPUT" != *"sys_test_val"* ]]; then
+          echo "Failed: echo builtin did not produce expected output."
+          exit 1
+        fi
+
+        echo "=== Testing PWD Builtin ==="
+        OUTPUT=$(echo "pwd" | ./minishell)
+        if [[ "$OUTPUT" != *"$PWD"* ]]; then
+          echo "Failed: pwd builtin did not match the current working directory."
+          exit 1
+        fi
+
+        echo "=== Testing Pipeline Execution ==="
+        # Tests the pipe parsing and STDOUT/STDIN file descriptor duplication
+        OUTPUT=$(echo "echo pipeline_data_stream | grep pipeline" | ./minishell)
+        if [[ "$OUTPUT" != *"pipeline_data_stream"* ]]; then
+          echo "Failed: pipe handling or child process execution failed."
+          exit 1
+        fi
+        
+        echo "All core functional tests passed."
+
+    - name: Memory Integrity Check (Valgrind)
+      # --trace-children=yes ensures processes spawned by fork() are also analyzed
+      # --error-exitcode=1 forces the pipeline to fail if memory errors are detected
+      run: |
+        echo "=== Running Valgrind ==="
+        echo "exit" | valgrind --leak-check=full \
+                              --show-leak-kinds=all \
+                              --track-origins=yes \
+                              --trace-children=yes \
+                              --error-exitcode=1 \
+                              ./minishell
