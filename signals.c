@@ -27,6 +27,17 @@ void signal_handler(int sig, siginfo_t *info, void *data) {
                     last_exit_status = 128 + WTERMSIG(wstatus); 
                 }
 
+                // Only announce completion for jobs the user ISN'T
+                // currently watching in the foreground - i.e. background
+                // jobs (started with "&" or resumed with "bg"). Real
+                // shells stay silent about the job you're actively
+                // attached to (you can see it finish yourself) and only
+                // print an async "[id]+  Done ..." style notice for
+                // background jobs, right before the next prompt.
+                if (pid != foreground_pid) {
+                    print_job_done_notice(pid, wstatus);
+                }
+
                 // This safely removes the job if it was in the background/list
                 remove_job(pid); 
             }
@@ -35,18 +46,21 @@ void signal_handler(int sig, siginfo_t *info, void *data) {
             else if (WIFSTOPPED(wstatus)) {
                 // Only add it to the list if it isn't already there
                 // (e.g. it may already be tracked if this is a job that
-                // was fg'd and got Ctrl+Z'd a second time).
-                if (!job_exists(pid)) {
+                // was fg'd and got Ctrl+Z'd a second time) - in that
+                // case just mark it stopped again.
+                Job *existing = find_job_by_pid(pid);
+                if (existing == NULL) {
                     // current_fg_cmd now always holds the FULL command
                     // line of whatever is currently in the foreground
                     // (set by handle_redirection_and_piping / call_n_pipe
                     // / bring_job_to_foreground), not just argv[0].
-                    add_job(pid, current_fg_cmd);
+                    add_job(pid, current_fg_cmd, JOB_STOPPED);
+                } else {
+                    existing->state = JOB_STOPPED;
                 }
-                
-                // Async-signal-safe way to print a notification to the user
-                char msg[] = "\n" COLOR_YELLOW "[Suspended]" COLOR_RESET "\n";
-                write(STDOUT_FILENO, msg, sizeof(msg) - 1);
+
+                // Bash-style "[id]+  Stopped   command" notice.
+                print_job_stopped_notice(pid);
             }
 
             // SYNCHRONIZATION: Wake up the main shell loop / fg's wait loop

@@ -11,6 +11,17 @@ int job_exists(pid_t pid) {
     return 0;
 }
 
+Job *find_job_by_pid(pid_t pid) {
+    Job *temp = job_list;
+    while (temp != NULL) {
+        if (temp->pid == pid) {
+            return temp;
+        }
+        temp = temp->next;
+    }
+    return NULL;
+}
+
 int get_last_job_id() {
     // If there are no background jobs, return -1 as an error code
     if (job_list == NULL) {
@@ -27,7 +38,7 @@ int get_last_job_id() {
     return temp->job_id;
 }
 
-void add_job(pid_t pid, char *command) {
+void add_job(pid_t pid, char *command, int state) {
     Job *new_job = malloc(sizeof(Job));
     if (new_job == NULL) {
         perror("minishell: malloc failed for new job");
@@ -40,6 +51,7 @@ void add_job(pid_t pid, char *command) {
     
     new_job->pid = pid;
     new_job->job_id = next_job_id++;
+    new_job->state = state;
     new_job->next = NULL;
 
     // Case 1: The list is empty
@@ -97,9 +109,72 @@ void list_jobs() {
     
     Job *temp = job_list;
     while (temp != NULL) {
-        printf(COLOR_YELLOW "[%d]" COLOR_RESET " %d  " COLOR_CYAN "%s\n" COLOR_RESET,
-               temp->job_id, temp->pid, temp->command);
+        const char *state_str = (temp->state == JOB_STOPPED) ? "Stopped" : "Running";
+        const char *state_color = (temp->state == JOB_STOPPED) ? COLOR_YELLOW : COLOR_GREEN;
+        printf(COLOR_YELLOW "[%d]+" COLOR_RESET "  %s%-23s" COLOR_RESET " " COLOR_CYAN "%s\n" COLOR_RESET,
+               temp->job_id, state_color, state_str, temp->command);
         temp = temp->next;
+    }
+}
+
+// Prints a bash-style "[id]+  Stopped   command" notice for a job that
+// was just suspended (Ctrl+Z). Must be called AFTER the job has been
+// added to (or already exists in) job_list, so its job_id is known.
+void print_job_stopped_notice(pid_t pid) {
+    Job *j = find_job_by_pid(pid);
+    if (j == NULL) {
+        return;
+    }
+
+    char buf[MAX_INPUT_SIZE + 64];
+    int len = snprintf(buf, sizeof(buf),
+                        "\n" COLOR_YELLOW "[%d]+  %-23s" COLOR_RESET " %s\n",
+                        j->job_id, "Stopped", j->command);
+    if (len > 0) {
+        write(STDOUT_FILENO, buf, (size_t)len);
+    }
+}
+
+// Prints a bash-style completion notice ("Done" / "Exit N" /
+// "Terminated" / "Killed") for a BACKGROUND job that finished on its
+// own, i.e. one the user isn't currently watching in the foreground.
+// Must be called BEFORE remove_job() so the job's id/command are still
+// available.
+void print_job_done_notice(pid_t pid, int wstatus) {
+    Job *j = find_job_by_pid(pid);
+    if (j == NULL) {
+        return;
+    }
+
+    char status_str[32];
+    const char *color = COLOR_GREEN;
+
+    if (WIFEXITED(wstatus)) {
+        int code = WEXITSTATUS(wstatus);
+        if (code == 0) {
+            snprintf(status_str, sizeof(status_str), "Done");
+        } else {
+            snprintf(status_str, sizeof(status_str), "Exit %d", code);
+            color = COLOR_RED;
+        }
+    } else if (WIFSIGNALED(wstatus)) {
+        int sig = WTERMSIG(wstatus);
+        if (sig == SIGKILL) {
+            snprintf(status_str, sizeof(status_str), "Killed");
+        } else {
+            snprintf(status_str, sizeof(status_str), "Terminated");
+        }
+        color = COLOR_RED;
+    } else {
+        return; // shouldn't happen for this code path
+    }
+
+    char buf[MAX_INPUT_SIZE + 64];
+    int len = snprintf(buf, sizeof(buf),
+                        "\n%s[%d]+  %-23s" COLOR_RESET " %s\n",
+                        color, j->job_id, status_str, j->command);
+    if (len > 0) {
+        write(STDOUT_FILENO, buf, (size_t)len);
     }
 }
 
@@ -166,7 +241,8 @@ void send_job_to_background(int job_id) {
     }
     
     pid_t target_pid = temp->pid;
+    temp->state = JOB_RUNNING;
 
-    printf(COLOR_GREEN "[%d]  %s &\n" COLOR_RESET, job_id, temp->command);
+    printf(COLOR_GREEN "[%d]+ %s &\n" COLOR_RESET, job_id, temp->command);
     kill(target_pid, SIGCONT);
 }

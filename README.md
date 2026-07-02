@@ -35,15 +35,35 @@ PS1="myshell> "
 - **Background jobs:** append `&` to run a command without blocking the
   shell, e.g. `sleep 30 &`. The shell prints `[job_id] pid`.
 - **Job control:**
-  - `jobs` — lists background/suspended jobs with their id, pid, and
-    full command line.
+  - `jobs` — lists background/suspended jobs with id, state
+    (`Running`/`Stopped`), and full command line, bash-style:
+    ```
+    [1]+  Stopped                 sleep 30
+    [2]+  Running                 sleep 60 &
+    ```
   - `fg [job_id]` — brings a job into the foreground and gives it the
     terminal. Omit the id to use the most recently added job.
-  - `bg [job_id]` — resumes a stopped job in the background.
+  - `bg [job_id]` — resumes a stopped job in the background, printing
+    `[id]+ command &`.
   - **Ctrl+C** (`SIGINT`) interrupts whatever currently owns the
     terminal.
-  - **Ctrl+Z** (`SIGTSTP`) suspends the foreground job and adds it to
-    the job list automatically.
+  - **Ctrl+Z** (`SIGTSTP`) suspends the foreground job, adds it to the
+    job list, and prints a bash-style notice:
+    ```
+    [1]+  Stopped                 sleep 30
+    ```
+  - **Asynchronous completion notices.** When a *background* job (one
+    started with `&` or resumed with `bg`) finishes on its own — even
+    while you've since moved on to other commands — the shell announces
+    it right before the next prompt, exactly like bash:
+    ```
+    [1]+  Done                    sleep 5
+    [2]+  Exit 1                  false
+    [3]+  Terminated              some_long_job
+    ```
+    The job you're actively watching in the foreground is never
+    announced this way (you can see it finish yourself); only jobs
+    running unattended in the background get this notice.
 - **Colored UI:** the prompt, error messages, and job-control
   notifications (`[Suspended]`, background job start, `jobs` output,
   etc.) are colorized with ANSI escape codes. Program output itself is

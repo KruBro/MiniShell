@@ -36,11 +36,17 @@
 #define COLOR_CYAN    "\033[36m"
 #define COLOR_GRAY    "\033[90m"
 
+// Job states, used so `jobs` / notifications can show Running vs
+// Stopped, matching real shells.
+#define JOB_RUNNING 0
+#define JOB_STOPPED 1
+
 // Job control structures
 typedef struct Job {
     int job_id;
     pid_t pid;
     char command[MAX_INPUT_SIZE];
+    int state;
     struct Job *next;
 } Job;
 
@@ -71,17 +77,16 @@ void handle_builtin_command(char **args);
 void handle_redirection_and_piping(char **args, char *raw_cmd, int background);
 void signal_handler(int sig, siginfo_t *info, void *data);
 void init_signal_handlers();
-void add_job(pid_t pid, char *command);
+void add_job(pid_t pid, char *command, int state);
 void remove_job(pid_t pid);
+Job *find_job_by_pid(pid_t pid);
+void print_job_stopped_notice(pid_t pid);
+void print_job_done_notice(pid_t pid, int wstatus);
 void list_jobs();
 void bring_job_to_foreground(int job_id);
 void send_job_to_background(int job_id);
 int call_n_pipe(int no_of_args, int command_count, char **args, char *raw_cmd);
 int get_last_job_id();
 int job_exists(pid_t pid);
-
-// Redirection helpers
-// int extract_redirection(char **argv, Redirection *redir);
-// int apply_redirection(Redirection *redir);
 
 #endif // MINISHELL_H

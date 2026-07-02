@@ -197,6 +197,14 @@ void wait_for_foreground(pid_t pid) {
 }
 
 int execute_command(char **args, char *raw_cmd, int background) {
+    // BUGFIX: is_builtin_command() only ever looked at args[0]. That
+    // meant something like "echo hi | grep h" was dispatched straight to
+    // the echo builtin, which just printed "hi | grep h" literally - the
+    // pipe was never even recognized. A builtin only gets its special,
+    // in-process handling when it is the *entire* command; if a pipe is
+    // present anywhere on the line, fall through to the normal
+    // fork/exec/pipe path (matching how real shells run builtins that
+    // appear inside a pipeline as separate processes).
     int has_pipe = 0;
     for (int i = 0; args[i] != NULL; i++) {
         if (strcmp(args[i], "|") == 0) {

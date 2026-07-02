@@ -107,6 +107,11 @@ int call_n_pipe(int no_of_args, int command_count, char **args, char *raw_cmd) {
                 close(fd[1]);
             }
 
+            // BUGFIX: this was previously nested one brace too deep,
+            // inside `if (i < command_count - 1)`, which made the
+            // condition `i == command_count - 1` impossible to satisfy
+            // at the same time — foreground_pid was NEVER set, so the
+            // shell never waited for the pipeline to finish.
             if (i == command_count - 1) {
                 foreground_pid = ret;
             }
@@ -177,7 +182,7 @@ void handle_redirection_and_piping(char **args, char *raw_cmd, int background) {
             current_fg_cmd[MAX_INPUT_SIZE - 1] = '\0';
 
             if (background) {
-                add_job(pid, raw_cmd);
+                add_job(pid, raw_cmd, JOB_RUNNING);
                 printf(COLOR_YELLOW "[%d] %d\n" COLOR_RESET, next_job_id - 1, pid);
             } else {
                 tcsetpgrp(STDIN_FILENO, pid);
